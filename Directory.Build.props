@@ -7,10 +7,20 @@
         <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     </PropertyGroup>
 
-    <PropertyGroup>
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
         <PublishAot>true</PublishAot>
         <InvariantGlobalization>true</InvariantGlobalization>
         <OptimizationPreference>Size</OptimizationPreference>
+        <StackTraceSupport>false</StackTraceSupport>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+        <PublishAot>false</PublishAot>
+        <PublishTrimmed>false</PublishTrimmed>
+        <IsTrimmable>false</IsTrimmable>
+        <!-- 确保 Debug 模式下调试符号完整以支持 Rider DPA -->
+        <DebugType>full</DebugType>
+        <Optimize>false</Optimize>
     </PropertyGroup>
 
     <PropertyGroup>

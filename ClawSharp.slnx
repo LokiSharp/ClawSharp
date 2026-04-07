@@ -1,4 +1,12 @@
 <Solution>
+    <Folder Name="/Documentation/">
+        <File Path="README.md" />
+        <File Path="SPEC.md" />
+        <File Path="docs/specs/01-architecture.md" />
+        <File Path="docs/specs/02-core-engine.md" />
+        <File Path="docs/specs/03-security.md" />
+        <File Path="docs/specs/04-native-aot.md" />
+    </Folder>
     <Project Path="src/ClawSharp.Core/ClawSharp.Core.csproj"/>
     <Project Path="src/ClawSharp.CLI/ClawSharp.CLI.csproj"/>
     <Project Path="src/ClawSharp.Plugins/ClawSharp.Plugins.csproj"/>
