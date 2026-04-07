@@ -1,0 +1,76 @@
+# =========================
+# 编译与构建产物 (Build Results)
+# =========================
+[Bb]in/
+[Oo]bj/
+[Bb]uild/
+[Dd]ist/
+[Oo]ut/
+[Tt]est[Rr]esults/
+
+# =========================
+# IDE 与编辑器配置 (IDE & Editors)
+# =========================
+.idea/
+*.sln.iml
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.vs/
+*.user
+*.suo
+
+# =========================
+# 🐧 Linux 操作系统残留
+# =========================
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =========================
+# 🍎 macOS 操作系统残留
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# =========================
+# 🪟 Windows 操作系统残留
+# =========================
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# =========================
+# AI 与应用数据 (AI & Agent Data)
+# =========================
+.env
+.env.*
+*.secret.json
+appsettings.Development.json
+appsettings.local.json
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+/chroma_data/
+*.log
+/logs/
+
+# =========================
+# .NET 缓存
+# =========================
+project.lock.json
+project.assets.json
+*.nuget.props
+*.nuget.targets

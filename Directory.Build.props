@@ -1,0 +1,22 @@
+<Project>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <PublishAot>true</PublishAot>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <OptimizationPreference>Size</OptimizationPreference>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <Authors>LokiSharp</Authors>
+        <Company>LokiSharp</Company>
+        <Product>ClawSharp</Product>
+        <Copyright>Copyright © $([System.DateTime]::Now.Year)</Copyright>
+    </PropertyGroup>
+</Project>

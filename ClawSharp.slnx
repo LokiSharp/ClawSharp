@@ -1,0 +1,6 @@
+<Solution>
+    <Project Path="src/ClawSharp.Core/ClawSharp.Core.csproj"/>
+    <Project Path="src/ClawSharp.CLI/ClawSharp.CLI.csproj"/>
+    <Project Path="src/ClawSharp.Plugins/ClawSharp.Plugins.csproj"/>
+    <Project Path="tests/ClawSharp.Core.Tests/ClawSharp.Core.Tests.csproj"/>
+</Solution>
