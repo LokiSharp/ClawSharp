@@ -12,5 +12,5 @@ public interface IAgentWorkflow
     /// <summary>
     /// 处理用户请求并进入推理循环 (ReAct)
     /// </summary>
-    IAsyncEnumerable<ReasoningStep> RunAsync(string prompt, ActionApprovalCallback? onApproval = null, CancellationToken ct = default);
+    IAsyncEnumerable<ReasoningStep> RunAsync(string prompt, ActionApprovalCallback? onApproval = null, string? model = null, CancellationToken ct = default);
 }

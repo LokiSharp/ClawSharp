@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClawSharp.Core;
@@ -49,8 +50,16 @@ public class ShellCommandPlugin : IClawTool
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
+            // 使用 Base64 编码传递命令，避免任何转义/嵌套引号导致的挂起或解析错误
+            // PowerShell 的 -EncodedCommand 期望的是 Base64 编码的 UTF-16LE 字符串
+            // 显式设置编码为 UTF8 以确保输出不乱码
+            string fullCommand = $"$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}";
+            var bytes = Encoding.Unicode.GetBytes(fullCommand);
+            var base64 = Convert.ToBase64String(bytes);
+            
             startInfo.FileName = "powershell.exe";
-            startInfo.Arguments = $"-NoProfile -Command \"{command.Replace("\"", "\\\"")}\"";
+            // -NoLogo 和 -NonInteractive 有助于在无头环境下更稳定地执行
+            startInfo.Arguments = $"-NoProfile -NonInteractive -NoLogo -ExecutionPolicy Bypass -EncodedCommand {base64}";
         }
         else
         {
@@ -63,31 +72,47 @@ public class ShellCommandPlugin : IClawTool
         startInfo.UseShellExecute = false;
         startInfo.CreateNoWindow = true;
 
+        // 设置输出编码为 UTF8，避免中文乱码
+        startInfo.StandardOutputEncoding = Encoding.UTF8;
+        startInfo.StandardErrorEncoding = Encoding.UTF8;
+
         using var process = new Process { StartInfo = startInfo };
         
         try 
         {
             process.Start();
+            
+            // 先并发读取流，再等待进程退出或超时，防止缓冲区死锁
             var outputTask = process.StandardOutput.ReadToEndAsync(ct);
             var errorTask = process.StandardError.ReadToEndAsync(ct);
+            var exitTask = process.WaitForExitAsync(ct);
 
-            await Task.WhenAny(Task.Delay(TimeSpan.FromMinutes(2), ct), process.WaitForExitAsync(ct));
+            // 设置 5 分钟的硬超时
+            var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5), ct);
+            var completedTask = await Task.WhenAny(exitTask, timeoutTask);
 
-            if (!process.HasExited)
+            if (completedTask == timeoutTask)
             {
                 process.Kill(true);
-                return "Error: Command timed out after 2 minutes.";
+                return "Error: Command timed out after 5 minutes.";
             }
 
+            // 进程已退出，等待读取完成
             var output = await outputTask;
             var error = await errorTask;
 
             if (process.ExitCode != 0)
             {
-                return $"Error (ExitCode {process.ExitCode}): {error}{output}";
+                var combinedError = (error + output).Trim();
+                return $"Error (ExitCode {process.ExitCode}): {combinedError}";
             }
 
-            return string.IsNullOrEmpty(output) ? "Command executed successfully (no output)." : output;
+            if (string.IsNullOrWhiteSpace(output) && string.IsNullOrWhiteSpace(error))
+            {
+                return "Command executed successfully (no output).";
+            }
+
+            return output;
         }
         catch (Exception ex)
         {

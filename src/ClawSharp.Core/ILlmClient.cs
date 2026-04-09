@@ -7,6 +7,6 @@ namespace ClawSharp.Core;
 /// </summary>
 public interface ILlmClient
 {
-    Task<string> ChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, CancellationToken ct = default);
-    IAsyncEnumerable<string> StreamChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, CancellationToken ct = default);
+    Task<string> ChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, string? model = null, CancellationToken ct = default);
+    IAsyncEnumerable<string> StreamChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, string? model = null, CancellationToken ct = default);
 }

@@ -21,6 +21,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\ClawSharp.Core\ClawSharp.Core.csproj"/>
+        <ProjectReference Include="..\..\src\ClawSharp.Plugins\ClawSharp.Plugins.csproj"/>
     </ItemGroup>
 
 </Project>

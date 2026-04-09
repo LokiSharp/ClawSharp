@@ -1,5 +1,6 @@
 ﻿using ClawSharp.Core.Memory;
 using ClawSharp.Core.Models;
+using ClawSharp.Plugins.System;
 
 namespace ClawSharp.Core.Tests;
 
@@ -21,18 +22,20 @@ public class UnitTest
     {
         private int _callCount = 0;
         public List<IEnumerable<ChatMessage>> CapturedMessages { get; } = [];
+        public List<string?> CapturedModels { get; } = [];
 
-        public Task<string> ChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, CancellationToken ct = default)
+        public Task<string> ChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, string? model = null, CancellationToken ct = default)
         {
             CapturedMessages.Add(messages.ToList());
+            CapturedModels.Add(model);
             var response = _callCount < responses.Length ? responses[_callCount] : "Done.";
             _callCount++;
             return Task.FromResult(response);
         }
 
-        public async IAsyncEnumerable<string> StreamChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        public async IAsyncEnumerable<string> StreamChatAsync(IEnumerable<ChatMessage> messages, IEnumerable<IClawTool>? tools = null, string? model = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
-            yield return await ChatAsync(messages, tools, ct);
+            yield return await ChatAsync(messages, tools, model, ct);
         }
     }
 
@@ -67,15 +70,17 @@ public class UnitTest
         }
 
         // Assert
-        // 应产生 3 个步骤：1. Action, 2. Observation, 3. Final Thought
-        Assert.Equal(3, steps.Count);
+        // 应产生 4 个步骤：1. Action, 2. Executing, 3. Observation, 4. Final Thought
+        Assert.Equal(4, steps.Count);
         
         Assert.Contains("echo tool", steps[0].Thought);
         Assert.Equal("Echo", steps[0].Action?.ToolName);
-        
-        Assert.Equal("Echoed: Hello", steps[1].Observation);
 
-        Assert.Contains("finished", steps[2].Thought);
+        Assert.Equal("Echo", steps[1].ExecutingTool);
+        
+        Assert.Equal("Echoed: Hello", steps[2].Observation);
+
+        Assert.Contains("finished", steps[3].Thought);
     }
 
     [Fact]
@@ -96,11 +101,12 @@ public class UnitTest
         }
 
         // Assert
-        Assert.Equal(3, steps.Count);
+        Assert.Equal(4, steps.Count);
         Assert.Contains("BadTool", steps[0].Action?.ToolName);
-        Assert.Contains("Error", steps[1].Observation);
-        Assert.Contains("BadTool", steps[1].Observation);
-        Assert.Contains("ending", steps[2].Thought);
+        Assert.Equal("BadTool", steps[1].ExecutingTool);
+        Assert.Contains("Error", steps[2].Observation);
+        Assert.Contains("BadTool", steps[2].Observation);
+        Assert.Contains("ending", steps[3].Thought);
     }
 
     [Fact]
@@ -127,8 +133,8 @@ public class UnitTest
         }
 
         // Assert
-        // 每轮循环产生 2 个 Step (Action/Thought + Observation)，共 5 次循环 = 10 个 Step
-        Assert.Equal(10, steps.Count);
+        // 每轮循环产生 3 个 Step (Action/Thought + Executing + Observation)，共 5 次循环 = 15 个 Step
+        Assert.Equal(15, steps.Count);
     }
 
     [Fact]
@@ -189,11 +195,12 @@ public class UnitTest
         }
 
         // Assert
-        Assert.Equal(3, steps.Count);
+        Assert.Equal(4, steps.Count);
         Assert.Contains("FailTool", steps[0].Action?.ToolName);
-        Assert.Contains("Error executing tool", steps[1].Observation);
-        Assert.Contains("Tool failed", steps[1].Observation);
-        Assert.Contains("failed, I see", steps[2].Thought);
+        Assert.Equal("FailTool", steps[1].ExecutingTool);
+        Assert.Contains("Error executing tool", steps[2].Observation);
+        Assert.Contains("Tool failed", steps[2].Observation);
+        Assert.Contains("failed, I see", steps[3].Thought);
     }
 
     [Fact]
@@ -288,11 +295,11 @@ public class UnitTest
         await foreach (var _ in workflow.RunAsync("New Query")) { }
 
         // Assert
-        // LLM 应该接收到之前的历史记录
+        // LLM 应该接收到最新的系统提示词（覆盖了加载的旧提示词）
         Assert.Single(mockLlm.CapturedMessages);
         var messages = mockLlm.CapturedMessages[0].ToList();
         Assert.Equal(4, messages.Count); // System, Query, Answer, New Query
-        Assert.Equal("Existing System Prompt", messages[0].Content);
+        Assert.Contains("ClawSharp", messages[0].Content);
         Assert.Equal("New Query", messages[3].Content);
 
         // 记忆应该包含新的回复
@@ -318,7 +325,8 @@ public class UnitTest
 
         // Assert
         // _history 在下一次调用 LLM 之前被修剪
-        Assert.True(history.Count <= 12); // 11 (pruned) + 1 (last response)
+        // 修剪后保留 System + 最近 12 条中的 User 起点
+        Assert.True(history.Count <= 15); 
         Assert.Equal(MessageRole.System, history[0].Role);
     }
 
@@ -347,5 +355,38 @@ public class UnitTest
         {
             if (File.Exists(tempFile)) File.Delete(tempFile);
         }
+    }
+
+    [Fact]
+    public async Task AgentWorkflow_UsesSpecifiedModel()
+    {
+        // Arrange
+        var mockLlm = new MockLlmClient("Done.");
+        var workflow = new AgentWorkflow(mockLlm, []);
+
+        // Act
+        await foreach (var _ in workflow.RunAsync("Hello", model: "specific-model")) { }
+
+        // Assert
+        Assert.Contains("specific-model", mockLlm.CapturedModels);
+    }
+
+    [Fact]
+    public async Task ShellCommandPlugin_Windows_EscapesQuotesCorrectly()
+    {
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+            return;
+
+        // Arrange
+        var plugin = new ClawSharp.Plugins.System.ShellCommandPlugin();
+        // 模拟用户报告的命令，该命令包含嵌套的 powershell 调用和引号
+        var command = "powershell -Command \"echo 'hello'\"";
+        
+        // Act
+        var result = await plugin.ExecuteAsync($"{{\"command\": \"{command.Replace("\"", "\\\"")}\"}}");
+
+        // Assert
+        Assert.DoesNotContain("Error", (string?)result);
+        Assert.Contains("hello", (string?)result);
     }
 }

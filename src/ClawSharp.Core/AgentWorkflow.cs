@@ -30,6 +30,7 @@ public partial class AgentWorkflow(
     public async IAsyncEnumerable<ReasoningStep> RunAsync(
         string prompt, 
         ActionApprovalCallback? onApproval = null,
+        string? model = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         // 0. 加载历史记录 (如果尚未加载)
@@ -38,10 +39,21 @@ public partial class AgentWorkflow(
             _history = await memoryProvider.LoadHistoryAsync(ct);
         }
 
-        // 0. 初始化系统提示词 (仅在会话真正开始时)
+        // 0. 确保系统提示词始终存在且在第一条
+        var systemPrompt = BuildSystemPrompt();
         if (_history.Count == 0)
         {
-            _history.Add(new ChatMessage(MessageRole.System, BuildSystemPrompt()));
+            _history.Add(new ChatMessage(MessageRole.System, systemPrompt));
+        }
+        else if (_history[0].Role != MessageRole.System)
+        {
+            // 如果第一条不是系统消息，则插入一条
+            _history.Insert(0, new ChatMessage(MessageRole.System, systemPrompt));
+        }
+        else 
+        {
+            // 如果第一条是系统消息，更新它以确保包含最新的环境信息
+            _history[0] = new ChatMessage(MessageRole.System, systemPrompt);
         }
 
         // 1. 记录用户意图
@@ -52,20 +64,28 @@ public partial class AgentWorkflow(
 
         for (int i = 0; i < maxIterations && !isTaskComplete; i++)
         {
-            // 2. 调用 LLM 获取下一步计划 (Thought + Action)
-            // 在自研模式下，我们需要在 System Prompt 中定义 ReAct 的格式要求
-            string response = await llmClient.ChatAsync(_history, tools, ct);
-
-            // 解析前清理历史记录（如果过大，可以实现更复杂的摘要逻辑）
+            // 在调用 LLM 之前修剪历史记录
             if (_history.Count > 20)
             {
-                // 保留系统提示词和最近的 10 条消息
                 var systemMessage = _history[0];
-                var recentMessages = _history.TakeLast(10).ToList();
+                
+                // 取最近的 12 条消息
+                var recentMessages = _history.TakeLast(12).ToList();
+                
+                // 确保修剪后的第一条消息是 User 角色，以符合大多数模型的预期
+                int firstUserIndex = recentMessages.FindIndex(m => m.Role == MessageRole.User || m.Role == MessageRole.Tool);
+                if (firstUserIndex != -1)
+                {
+                    recentMessages = recentMessages.Skip(firstUserIndex).ToList();
+                }
+
                 _history.Clear();
                 _history.Add(systemMessage);
                 _history.AddRange(recentMessages);
             }
+
+            // 2. 调用 LLM 获取下一步计划 (Thought + Action)
+            string response = await llmClient.ChatAsync(_history, tools, model, ct);
 
             // 3. 解析模型输出 (这里通常需要一个专门的 Parser)
             // 假设模型遵循：Thought: xxx \n Action: tool_name(args)
@@ -89,6 +109,8 @@ public partial class AgentWorkflow(
                 }
                 else
                 {
+                    yield return new ReasoningStep { ExecutingTool = toolCall.ToolName };
+
                     var tool = tools.FirstOrDefault(t => t.Name == toolCall.ToolName);
                     if (tool != null)
                     {
@@ -182,7 +204,10 @@ public partial class AgentWorkflow(
         sb.AppendLine("   示例：Action: shell_execute({\"command\": \"ls\"})");
         sb.AppendLine("3. **Observation**: 这是工具执行后的结果，由系统提供。");
         sb.AppendLine();
-        sb.AppendLine("重要：一次只能输出一个 Action。当任务完成时，请直接输出最终结论，不要再包含 Action。");
+        sb.AppendLine("重要规则：");
+        sb.AppendLine("- 一次只能输出一个 Action。");
+        sb.AppendLine("- 当任务完成或无需调用工具时，请直接输出最终结论或回复，不要包含 Action 字段。");
+        sb.AppendLine("- 严禁为了输出对话内容而使用 echo 等系统命令。普通的沟通应当直接作为文本输出。");
         sb.AppendLine("开始！");
         return sb.ToString();
     }

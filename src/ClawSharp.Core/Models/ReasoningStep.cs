@@ -13,6 +13,9 @@ public record ReasoningStep
 
     // Observation: 工具执行反馈
     public string? Observation { get; init; }
+
+    // ExecutingTool: 正在执行的工具名称 (用于 UI 反馈)
+    public string? ExecutingTool { get; init; }
 }
 
 public record ToolCall(string ToolName, string Arguments);

@@ -85,28 +85,57 @@ AnsiConsole.WriteLine();
 
 var workflow = serviceProvider.GetRequiredService<IAgentWorkflow>();
 
+var currentModel = model!;
+
 while (true)
 {
     var prompt = AnsiConsole.Ask<string>("[bold blue]>[/] ");
     if (string.IsNullOrWhiteSpace(prompt) || prompt == "exit") break;
 
+    if (prompt.StartsWith("/model "))
+    {
+        var newModel = prompt.Substring(7).Trim();
+        if (!string.IsNullOrEmpty(newModel))
+        {
+            currentModel = newModel;
+            AnsiConsole.MarkupLine($"[grey]Switched to model: {Markup.Escape(currentModel)}[/]");
+        }
+        continue;
+    }
+
     AnsiConsole.MarkupLine("[grey]Agent is processing your request...[/]");
-    await foreach (var step in workflow.RunAsync(prompt, async action => 
+    try
     {
-        return AnsiConsole.Confirm($"[yellow]Approval Required:[/] Allow execution of [bold]{Markup.Escape(action.ToolName)}[/]?");
-    }))
+        await foreach (var step in workflow.RunAsync(prompt, async action => 
+        {
+            return AnsiConsole.Confirm($"[yellow]Approval Required:[/] Allow execution of [bold]{Markup.Escape(action.ToolName)}[/]?");
+        }, model: currentModel))
+        {
+            if (step.ExecutingTool != null)
+            {
+                AnsiConsole.MarkupLine($"[grey]Executing tool: {Markup.Escape(step.ExecutingTool)}...[/]");
+                continue;
+            }
+            if (!string.IsNullOrEmpty(step.Thought))
+            {
+                AnsiConsole.MarkupLine($"[grey]Thought: {Markup.Escape(step.Thought)}[/]");
+            }
+            if (step.Action != null)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Action: {Markup.Escape(step.Action.ToolName)}({Markup.Escape(step.Action.Arguments)})[/]");
+            }
+            if (!string.IsNullOrEmpty(step.Observation))
+            {
+                AnsiConsole.MarkupLine($"[green]Observation: {Markup.Escape(step.Observation)}[/]");
+            }
+        }
+    }
+    catch (Exception ex)
     {
-        if (!string.IsNullOrEmpty(step.Thought))
+        AnsiConsole.MarkupLine($"[red]Error during processing:[/] {Markup.Escape(ex.Message)}");
+        if (ex.InnerException != null)
         {
-            AnsiConsole.MarkupLine($"[grey]Thought: {Markup.Escape(step.Thought)}[/]");
-        }
-        if (step.Action != null)
-        {
-            AnsiConsole.MarkupLine($"[yellow]Action: {Markup.Escape(step.Action.ToolName)}({Markup.Escape(step.Action.Arguments)})[/]");
-        }
-        if (!string.IsNullOrEmpty(step.Observation))
-        {
-            AnsiConsole.MarkupLine($"[green]Observation: {Markup.Escape(step.Observation)}[/]");
+            AnsiConsole.MarkupLine($"[red]Inner Error:[/] {Markup.Escape(ex.InnerException.Message)}");
         }
     }
 }
