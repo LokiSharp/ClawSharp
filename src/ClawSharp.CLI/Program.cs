@@ -1,6 +1,7 @@
 ﻿using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using ClawSharp.Core;
+using ClawSharp.Core.Memory;
 using ClawSharp.Plugins.FileOps;
 using ClawSharp.Plugins.System;
 using Microsoft.Extensions.Configuration;
@@ -58,8 +59,18 @@ services.AddSingleton<ILlmClient>(sp =>
 services.AddSingleton<IClawTool, ShellCommandPlugin>();
 services.AddSingleton<IClawTool, FileOpsPlugin>();
 
+services.AddSingleton<IMemoryProvider>(sp => 
+{
+    var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    var clawFolder = Path.Combine(appData, "ClawSharp");
+    return new JsonFileMemoryProvider(Path.Combine(clawFolder, "history.json"));
+});
+
 services.AddSingleton<IAgentWorkflow>(sp => 
-    new AgentWorkflow(sp.GetRequiredService<ILlmClient>(), sp.GetServices<IClawTool>()));
+    new AgentWorkflow(
+        sp.GetRequiredService<ILlmClient>(), 
+        sp.GetServices<IClawTool>(), 
+        sp.GetRequiredService<IMemoryProvider>()));
 
 var serviceProvider = services.BuildServiceProvider();
 

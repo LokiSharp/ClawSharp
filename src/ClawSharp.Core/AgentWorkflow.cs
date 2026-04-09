@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using ClawSharp.Core.Memory;
 using ClawSharp.Core.Models;
 
 namespace ClawSharp.Core;
@@ -10,9 +11,12 @@ namespace ClawSharp.Core;
 /// 手动实现 ReAct 思考循环 (Think-Act-Observe)
 /// 100% NativeAOT 友好，不依赖任何重量级框架。
 /// </summary>
-public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> tools) : IAgentWorkflow
+public partial class AgentWorkflow(
+    ILlmClient llmClient, 
+    IEnumerable<IClawTool> tools, 
+    IMemoryProvider? memoryProvider = null) : IAgentWorkflow
 {
-    private readonly List<ChatMessage> _history = [];
+    private List<ChatMessage> _history = [];
 
     [GeneratedRegex(@"(?:\*\*)*Thought(?:\*\*)*:\s*(.*?)(?=\s*(?:\*\*)*Action(?:\*\*)*:|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
     private static partial Regex ThoughtRegex();
@@ -28,7 +32,13 @@ public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> 
         ActionApprovalCallback? onApproval = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // 0. 初始化系统提示词 (仅在会话开始时)
+        // 0. 加载历史记录 (如果尚未加载)
+        if (_history.Count == 0 && memoryProvider != null)
+        {
+            _history = await memoryProvider.LoadHistoryAsync(ct);
+        }
+
+        // 0. 初始化系统提示词 (仅在会话真正开始时)
         if (_history.Count == 0)
         {
             _history.Add(new ChatMessage(MessageRole.System, BuildSystemPrompt()));
@@ -45,6 +55,17 @@ public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> 
             // 2. 调用 LLM 获取下一步计划 (Thought + Action)
             // 在自研模式下，我们需要在 System Prompt 中定义 ReAct 的格式要求
             string response = await llmClient.ChatAsync(_history, tools, ct);
+
+            // 解析前清理历史记录（如果过大，可以实现更复杂的摘要逻辑）
+            if (_history.Count > 20)
+            {
+                // 保留系统提示词和最近的 10 条消息
+                var systemMessage = _history[0];
+                var recentMessages = _history.TakeLast(10).ToList();
+                _history.Clear();
+                _history.Add(systemMessage);
+                _history.AddRange(recentMessages);
+            }
 
             // 3. 解析模型输出 (这里通常需要一个专门的 Parser)
             // 假设模型遵循：Thought: xxx \n Action: tool_name(args)
@@ -91,12 +112,23 @@ public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> 
                 // 5. 将 Observation 反馈给历史，进入下一轮思考
                 _history.Add(new ChatMessage(MessageRole.Assistant, response));
                 _history.Add(new ChatMessage(MessageRole.Tool, observation, toolCall.ToolName));
+
+                if (memoryProvider != null)
+                {
+                    await memoryProvider.SaveHistoryAsync(_history, ct);
+                }
             }
             else
             {
                 // 没有工具调用，任务可能已完成或只是普通对话
                 yield return new ReasoningStep { Thought = thought ?? response };
                 _history.Add(new ChatMessage(MessageRole.Assistant, response));
+
+                if (memoryProvider != null)
+                {
+                    await memoryProvider.SaveHistoryAsync(_history, ct);
+                }
+
                 isTaskComplete = true;
             }
         }

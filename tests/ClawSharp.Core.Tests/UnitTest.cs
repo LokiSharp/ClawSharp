@@ -1,9 +1,22 @@
-﻿using ClawSharp.Core.Models;
+﻿using ClawSharp.Core.Memory;
+using ClawSharp.Core.Models;
 
 namespace ClawSharp.Core.Tests;
 
 public class UnitTest
 {
+    private class MockMemoryProvider : IMemoryProvider
+    {
+        public List<ChatMessage> History { get; set; } = [];
+        public Task SaveHistoryAsync(IEnumerable<ChatMessage> history, CancellationToken ct = default)
+        {
+            History = history.ToList();
+            return Task.CompletedTask;
+        }
+        public Task<List<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default) => Task.FromResult(History);
+        public Task ClearAsync(CancellationToken ct = default) { History.Clear(); return Task.CompletedTask; }
+    }
+
     private class MockLlmClient(params string[] responses) : ILlmClient
     {
         private int _callCount = 0;
@@ -260,20 +273,79 @@ public class UnitTest
         Assert.Contains("denied", steps[2].Thought);
     }
     [Fact]
-    public async Task AgentWorkflow_SystemPrompt_IncludesOsInfo()
+    public async Task AgentWorkflow_MemoryProvider_LoadsAndSaves()
     {
         // Arrange
-        var mockLlm = new MockLlmClient("Done.");
-        var workflow = new AgentWorkflow(mockLlm, []);
+        var mockLlm = new MockLlmClient("Thought: Done.");
+        var mockMemory = new MockMemoryProvider();
+        mockMemory.History.Add(new ChatMessage(MessageRole.System, "Existing System Prompt"));
+        mockMemory.History.Add(new ChatMessage(MessageRole.User, "Previous Query"));
+        mockMemory.History.Add(new ChatMessage(MessageRole.Assistant, "Previous Answer"));
+        
+        var workflow = new AgentWorkflow(mockLlm, [], mockMemory);
 
         // Act
-        await foreach (var _ in workflow.RunAsync("Hello")) { }
+        await foreach (var _ in workflow.RunAsync("New Query")) { }
 
         // Assert
-        var systemMessage = mockLlm.CapturedMessages[0].First();
-        Assert.Equal(MessageRole.System, systemMessage.Role);
-        Assert.Contains("当前运行环境", systemMessage.Content);
-        // 在测试环境下，它应该包含当前 OS 的描述
-        Assert.Contains(System.Runtime.InteropServices.RuntimeInformation.OSDescription, systemMessage.Content);
+        // LLM 应该接收到之前的历史记录
+        Assert.Single(mockLlm.CapturedMessages);
+        var messages = mockLlm.CapturedMessages[0].ToList();
+        Assert.Equal(4, messages.Count); // System, Query, Answer, New Query
+        Assert.Equal("Existing System Prompt", messages[0].Content);
+        Assert.Equal("New Query", messages[3].Content);
+
+        // 记忆应该包含新的回复
+        Assert.Equal(5, mockMemory.History.Count);
+        Assert.Equal("Thought: Done.", mockMemory.History.Last().Content);
+    }
+
+    [Fact]
+    public async Task AgentWorkflow_ContextPruning_Works()
+    {
+        // Arrange
+        var mockLlm = new MockLlmClient("Thought: Done.");
+        var workflow = new AgentWorkflow(mockLlm, []);
+        
+        // 模拟 25 条历史记录
+        var historyField = typeof(AgentWorkflow).GetField("_history", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var history = (List<ChatMessage>)historyField!.GetValue(workflow)!;
+        history.Add(new ChatMessage(MessageRole.System, "System"));
+        for(int i=0; i<24; i++) history.Add(new ChatMessage(MessageRole.User, $"Msg {i}"));
+
+        // Act
+        await foreach (var _ in workflow.RunAsync("Trigger pruning")) { }
+
+        // Assert
+        // _history 在下一次调用 LLM 之前被修剪
+        Assert.True(history.Count <= 12); // 11 (pruned) + 1 (last response)
+        Assert.Equal(MessageRole.System, history[0].Role);
+    }
+
+    [Fact]
+    public async Task JsonFileMemoryProvider_SavesAsReadableUtf8()
+    {
+        // Arrange
+        var tempFile = Path.GetTempFileName();
+        var provider = new JsonFileMemoryProvider(tempFile);
+        var history = new List<ChatMessage>
+        {
+            new ChatMessage(MessageRole.User, "你好，世界")
+        };
+
+        try
+        {
+            // Act
+            await provider.SaveHistoryAsync(history);
+
+            // Assert
+            var content = await File.ReadAllTextAsync(tempFile);
+            Assert.Contains("你好，世界", content); // 如果被转义，这里会是 \u4F60\u597D
+            Assert.Contains("  \"role\": \"user\"", content); // 应该有缩进
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 }
