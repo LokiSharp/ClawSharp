@@ -1,4 +1,7 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
 using ClawSharp.Core.Models;
 
 namespace ClawSharp.Core;
@@ -11,16 +14,26 @@ public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> 
 {
     private readonly List<ChatMessage> _history = [];
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"Thought:\s*(.*?)(?=\s*Action:|$)", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex ThoughtRegex();
+    [GeneratedRegex(@"(?:\*\*)*Thought(?:\*\*)*:\s*(.*?)(?=\s*(?:\*\*)*Action(?:\*\*)*:|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex ThoughtRegex();
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"Action:\s*(\w+)\((.*)\)", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex ActionRegex();
+    [GeneratedRegex(@"(?:\*\*)*Action(?:\*\*)*:\s*(\w+)\((.*)\)", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex ActionRegex();
+
+    [GeneratedRegex(@"<think>\s*(.*?)\s*</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex ThinkRegex();
 
     public async IAsyncEnumerable<ReasoningStep> RunAsync(
         string prompt, 
+        ActionApprovalCallback? onApproval = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // 0. 初始化系统提示词 (仅在会话开始时)
+        if (_history.Count == 0)
+        {
+            _history.Add(new ChatMessage(MessageRole.System, BuildSystemPrompt()));
+        }
+
         // 1. 记录用户意图
         _history.Add(new ChatMessage(MessageRole.User, prompt));
 
@@ -46,23 +59,31 @@ public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> 
                 };
 
                 // 4. 执行工具调用 (Observe)
-                var tool = tools.FirstOrDefault(t => t.Name == toolCall.ToolName);
                 string observation;
                 
-                if (tool != null)
+                // 检查审批回调
+                if (onApproval != null && !await onApproval(toolCall))
                 {
-                    try
-                    {
-                        observation = await tool.ExecuteAsync(toolCall.Arguments, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        observation = $"Error executing tool '{toolCall.ToolName}': {ex.Message}";
-                    }
+                    observation = "Action denied by user.";
                 }
                 else
                 {
-                    observation = $"Error: Tool '{toolCall.ToolName}' not found.";
+                    var tool = tools.FirstOrDefault(t => t.Name == toolCall.ToolName);
+                    if (tool != null)
+                    {
+                        try
+                        {
+                            observation = await tool.ExecuteAsync(toolCall.Arguments, ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            observation = $"Error executing tool '{toolCall.ToolName}': {ex.Message}";
+                        }
+                    }
+                    else
+                    {
+                        observation = $"Error: Tool '{toolCall.ToolName}' not found.";
+                    }
                 }
 
                 yield return new ReasoningStep { Observation = observation };
@@ -83,19 +104,54 @@ public partial class AgentWorkflow(ILlmClient llmClient, IEnumerable<IClawTool> 
 
     private static (string? Thought, ToolCall? Action) ParseLlmResponse(string response)
     {
-        // 简单正则解析 ReAct 格式：Thought: [思考内容] Action: [工具名]([参数])
+        // 增强版解析：支持 **Thought**:、**Action**: 以及 <think> 标签
+        var thinkMatch = ThinkRegex().Match(response);
         var thoughtMatch = ThoughtRegex().Match(response);
         var actionMatch = ActionRegex().Match(response);
 
+        string? think = thinkMatch.Success ? thinkMatch.Groups[1].Value.Trim() : null;
         string? thought = thoughtMatch.Success ? thoughtMatch.Groups[1].Value.Trim() : null;
         ToolCall? action = actionMatch.Success ? new ToolCall(actionMatch.Groups[1].Value.Trim(), actionMatch.Groups[2].Value.Trim()) : null;
 
-        // 如果没匹配到显式格式，则整体视为 Thought
-        if (thought == null && action == null && !string.IsNullOrWhiteSpace(response))
+        // 合并思考过程
+        string? combinedThought = null;
+        if (think != null || thought != null)
         {
-            thought = response.Trim();
+            combinedThought = (think != null ? $"[Think] {think}\n" : "") + (thought ?? "");
+            combinedThought = combinedThought.Trim();
         }
 
-        return (thought, action); 
+        // 如果没匹配到显式格式，则整体视为 Thought
+        if (combinedThought == null && action == null && !string.IsNullOrWhiteSpace(response))
+        {
+            combinedThought = response.Trim();
+        }
+
+        return (combinedThought, action); 
+    }
+
+    private string BuildSystemPrompt()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("你是一个名为 ClawSharp 的 AI 助手。你生活在用户的本地系统中，拥有执行系统命令和操作文件的能力。");
+        sb.AppendLine($"当前运行环境: {RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture})");
+        sb.AppendLine("你必须遵循 ReAct (Reasoning and Acting) 模式进行思考和行动。");
+        sb.AppendLine();
+        sb.AppendLine("你可以使用的工具有：");
+        foreach (var tool in tools)
+        {
+            sb.AppendLine($"- {tool.Name}: {tool.Description}");
+            sb.AppendLine($"  参数格式: {tool.ParameterSchema}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("输出格式规范：");
+        sb.AppendLine("1. **Thought**: 思考当前的任务、已有的观察结果以及接下来的计划。");
+        sb.AppendLine("2. **Action**: 选择一个工具并提供参数，格式为：tool_name(arguments)。如果工具不需要参数，括号留空。");
+        sb.AppendLine("   示例：Action: shell_execute({\"command\": \"ls\"})");
+        sb.AppendLine("3. **Observation**: 这是工具执行后的结果，由系统提供。");
+        sb.AppendLine();
+        sb.AppendLine("重要：一次只能输出一个 Action。当任务完成时，请直接输出最终结论，不要再包含 Action。");
+        sb.AppendLine("开始！");
+        return sb.ToString();
     }
 }

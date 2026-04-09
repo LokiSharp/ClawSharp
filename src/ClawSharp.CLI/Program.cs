@@ -1,6 +1,8 @@
 ﻿using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using ClawSharp.Core;
+using ClawSharp.Plugins.FileOps;
+using ClawSharp.Plugins.System;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
@@ -53,8 +55,11 @@ services.AddSingleton<ILlmClient>(sp =>
     return new OpenAiLlmClient(httpClient, model!);
 });
 
+services.AddSingleton<IClawTool, ShellCommandPlugin>();
+services.AddSingleton<IClawTool, FileOpsPlugin>();
+
 services.AddSingleton<IAgentWorkflow>(sp => 
-    new AgentWorkflow(sp.GetRequiredService<ILlmClient>(), []));
+    new AgentWorkflow(sp.GetRequiredService<ILlmClient>(), sp.GetServices<IClawTool>()));
 
 var serviceProvider = services.BuildServiceProvider();
 
@@ -74,24 +79,23 @@ while (true)
     var prompt = AnsiConsole.Ask<string>("[bold blue]>[/] ");
     if (string.IsNullOrWhiteSpace(prompt) || prompt == "exit") break;
 
-    await AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .StartAsync("Thinking...", async ctx => 
+    AnsiConsole.MarkupLine("[grey]Agent is processing your request...[/]");
+    await foreach (var step in workflow.RunAsync(prompt, async action => 
+    {
+        return AnsiConsole.Confirm($"[yellow]Approval Required:[/] Allow execution of [bold]{Markup.Escape(action.ToolName)}[/]?");
+    }))
+    {
+        if (!string.IsNullOrEmpty(step.Thought))
         {
-            await foreach (var step in workflow.RunAsync(prompt))
-            {
-                if (!string.IsNullOrEmpty(step.Thought))
-                {
-                    AnsiConsole.MarkupLine($"[grey]Thought: {step.Thought}[/]");
-                }
-                if (step.Action != null)
-                {
-                    AnsiConsole.MarkupLine($"[yellow]Action: {step.Action.ToolName}({step.Action.Arguments})[/]");
-                }
-                if (!string.IsNullOrEmpty(step.Observation))
-                {
-                    AnsiConsole.MarkupLine($"[green]Observation: {step.Observation}[/]");
-                }
-            }
-        });
+            AnsiConsole.MarkupLine($"[grey]Thought: {Markup.Escape(step.Thought)}[/]");
+        }
+        if (step.Action != null)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Action: {Markup.Escape(step.Action.ToolName)}({Markup.Escape(step.Action.Arguments)})[/]");
+        }
+        if (!string.IsNullOrEmpty(step.Observation))
+        {
+            AnsiConsole.MarkupLine($"[green]Observation: {Markup.Escape(step.Observation)}[/]");
+        }
+    }
 }
